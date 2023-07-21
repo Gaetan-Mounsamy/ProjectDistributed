@@ -1,72 +1,91 @@
 import socket
 import threading
+import select
 import sys
 
 # Global variables
-clients = []
+clients = {}
+base_port = 12345
 
-def handle_connection(connection, name):
+def listen_for_broadcast():
+    broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    broadcast_socket.bind(("127.0.0.1", 54321))
+
     while True:
         try:
-            message = connection.recv(1024).decode()
-            if not message:
-                print(f"{name} disconnected.")
-                break
-            print(f"{name}: {message}")
-
-            # Broadcast the message to all other connected clients (excluding the sender)
-            for client in clients:
-                if client != connection:
-                    try:
-                        client.send(f"{name}: {message}".encode())
-                    except:
-                        print("Error occurred while broadcasting the message.")
+            data, address = broadcast_socket.recvfrom(1024)
+            name = data.decode()
+            clients[name] = address[0]
         except:
-            print(f"Error occurred with {name}.")
-            break
+            pass
 
-    connection.close()
-    clients.remove(connection)
-
-def accept_connections(server_socket):
+def handle_client(name, port):
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client_socket.bind(("0.0.0.0", port))
     while True:
-        connection, _ = server_socket.accept()
-        name = connection.recv(1024).decode()
-        clients.append(connection)
+        try:
+            message, _ = client_socket.recvfrom(1024)
+            print(message.decode())
+        except:
+            pass
 
-        client_thread = threading.Thread(target=handle_connection, args=(connection, name))
-        client_thread.start()
+def get_next_port():
+    global base_port
+    port = base_port
+    base_port += 1
+    return port
 
-def start_chat(port):
+def start_chat():
     name = input("Enter your name: ")
 
-    # Create a socket with a specific port number
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(("0.0.0.0", port))
-    server_socket.listen(5)
+    broadcast_thread = threading.Thread(target=listen_for_broadcast)
+    broadcast_thread.start()
 
-    print(f"Waiting for incoming connections on port {port}...")
+    port = get_next_port()
 
-    connection_thread = threading.Thread(target=accept_connections, args=(server_socket,))
-    connection_thread.start()
+    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listen_socket.bind(("0.0.0.0", port))
+
+    print(f"Listening for incoming connections on port {port}...")
+
+    inputs = [listen_socket, sys.stdin]
+
+    # Broadcast the name to other instances on the local network
+    broadcast_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    broadcast_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    broadcast_socket.sendto(name.encode(), ("<broadcast>", 54321))
 
     while True:
-        message = input()
-        if message.lower() == "exit":
-            break
-        # Broadcast the message to all connected clients (including the sender)
-        for client in clients:
-            try:
-                client.send(f"{name}: {message}".encode())
-            except:
-                print("Error occurred while sending the message.")
-
-    server_socket.close()
+        try:
+            readable, _, _ = select.select(inputs, [], [])
+            for sock in readable:
+                if sock == listen_socket:
+                    data, address = listen_socket.recvfrom(1024)
+                    print(data.decode())
+                elif sock == sys.stdin:
+                    message = input()
+                    if message.lower() == "exit":
+                        # Send an exit message to all clients and close the sockets
+                        message = f"{name} has left the chat."
+                        for client_address in clients.values():
+                            client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                            client_socket.sendto(message.encode(), (client_address, port))
+                            client_socket.close()
+                        listen_socket.close()
+                        sys.exit()
+                    message = f"{name}: {message}"
+                    for client_address in clients.values():
+                        client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        client_socket.sendto(message.encode(), (client_address, port))
+                        client_socket.close()
+        except:
+            pass
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python chat.py <port_number>")
-        sys.exit(1)
+    start_chat()
 
-    port = int(sys.argv[1])
-    start_chat(port)
+
+#python chat.py
