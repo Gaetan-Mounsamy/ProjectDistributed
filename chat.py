@@ -1,12 +1,11 @@
 import socket
 import threading
+import sys
 
 # Global variables
 clients = []
 
-def handle_connection(connection, address, name):
-    print(f"{name} connected from {address}")
-
+def handle_connection(connection, name):
     while True:
         try:
             message = connection.recv(1024).decode()
@@ -29,42 +28,45 @@ def handle_connection(connection, address, name):
     connection.close()
     clients.remove(connection)
 
-def accept_connections(server_socket, base_port):
+def accept_connections(server_socket):
     while True:
-        connection, address = server_socket.accept()
+        connection, _ = server_socket.accept()
         name = connection.recv(1024).decode()
         clients.append(connection)
 
-        # Send the assigned port number to the client
-        connection.send(str(base_port).encode())
-
-        client_thread = threading.Thread(target=handle_connection, args=(connection, address, name))
+        client_thread = threading.Thread(target=handle_connection, args=(connection, name))
         client_thread.start()
 
-def start_chat():
+def start_chat(port):
     name = input("Enter your name: ")
 
-    # Create a socket with a random available port
+    # Create a socket with a specific port number
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(("0.0.0.0", 0))
+    server_socket.bind(("0.0.0.0", port))
     server_socket.listen(5)
 
-    # Get the actual port assigned by the system
-    _, actual_port = server_socket.getsockname()
+    print(f"Waiting for incoming connections on port {port}...")
 
-    print(f"Waiting for incoming connections on port {actual_port}...")
-
-    connection_thread = threading.Thread(target=accept_connections, args=(server_socket, actual_port))
+    connection_thread = threading.Thread(target=accept_connections, args=(server_socket,))
     connection_thread.start()
 
     while True:
         message = input()
         if message.lower() == "exit":
             break
+        # Broadcast the message to all connected clients (including the sender)
+        for client in clients:
+            try:
+                client.send(f"{name}: {message}".encode())
+            except:
+                print("Error occurred while sending the message.")
 
     server_socket.close()
 
 if __name__ == "__main__":
-    start_chat()
+    if len(sys.argv) < 2:
+        print("Usage: python chat.py <port_number>")
+        sys.exit(1)
 
-#python chat.py
+    port = int(sys.argv[1])
+    start_chat(port)
